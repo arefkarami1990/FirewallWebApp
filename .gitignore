@@ -1,0 +1,25 @@
+# .NET
+backend/**/bin/
+backend/**/obj/
+*.user
+
+# build/test artifacts
+dist/
+build/
+*.log
+
+# local runtime data (never commit secrets/keys/audit)
+.fwgpoweb/
+*.enc
+secrets/
+audit/
+dataprotection-keys/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# editors
+.vs/
+.vscode/
+.idea/
