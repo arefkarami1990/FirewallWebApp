@@ -22,11 +22,25 @@
     for production use a PKI/CA-issued cert with SAN = SpnHost).
 
 .PARAMETER PublishDir
-    Directory containing the published app (default: <repo>\backend\FwGpoWeb
-    - the script runs `dotnet publish` into C:\Program Files\FwGpoWeb).
+    Directory containing an ALREADY PUBLISHED app (from `dotnet publish`
+    on an internet-connected machine). REQUIRED for offline installs.
+    The script copies its contents to C:\Program Files\FwGpoWeb.
 
-.EXAMPLE
-    .\Install-FwGpoWeb.ps1 -ServiceIdentity "CORP\FWGPO$" -AppUrl "https://fwgpo.corp.local" -CertThumbprint AB12...
+.PARAMETER SelfContained
+    Use when the publish in -PublishDir was created with
+    `-r win-x64 --self-contained true`. The app then carries its own .NET
+    runtime and the server needs NO .NET installation - the runtime
+    download check is skipped entirely (ideal for air-gapped servers).
+
+.PARAMETER FeatureSource
+    Path to the `sources\sxs` folder of a MOUNTED Windows Server 2022/2025
+    ISO (e.g. D:\sources\sxs). Used for offline IIS feature installation.
+    Only needed if IIS/Windows Auth is not already installed.
+
+.PARAMETER CapabilitySource
+    Root of a MOUNTED Windows Server 2022/2025 ISO (e.g. D:\). Used for
+    offline RSAT (Group Policy / AD PowerShell) installation. Only needed
+    if RSAT is not already installed.
 #>
 [CmdletBinding()]
 param(
@@ -34,7 +48,10 @@ param(
     [Parameter(Mandatory = $true)][string]$AppUrl,
     [int]$Port = 443,
     [string]$CertThumbprint = "",
-    [string]$PublishDir = ""
+    [string]$PublishDir = "",
+    [switch]$SelfContained,
+    [string]$FeatureSource = "",
+    [string]$CapabilitySource = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -57,6 +74,10 @@ $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
 if (-not $isAdmin) { throw "Run this script from an elevated (Administrator) prompt." }
 
 # --- 1. .NET 8 ASP.NET Core Runtime ------------------------------------------
+if ($SelfContained) {
+    Step ".NET runtime check SKIPPED (self-contained publish - app carries its own runtime)"
+}
+else {
 Step "Checking .NET 8 ASP.NET Core Runtime"
 $needDotnet = $true
 if (Get-Command dotnet -ErrorAction SilentlyContinue) {
@@ -72,6 +93,7 @@ if ($needDotnet) {
     if ($LASTEXITCODE -ne 0) { throw ".NET 8 ASP.NET Runtime installer failed (exit $LASTEXITCODE). Install it manually from https://dotnet.microsoft.com/download and re-run." }
     Write-Host "    installed." -ForegroundColor Green
 }
+}
 
 # --- 2. IIS + Windows Authentication -----------------------------------------
 Step "Installing IIS with Windows Authentication"
@@ -83,8 +105,11 @@ $features = @(
 )
 $missing = $features | Where-Object { -not (Get-WindowsFeature -Name $_ -ErrorAction SilentlyContinue) }
 if ($missing) {
-    Install-WindowsFeature -Name $missing -IncludeManagementTools -ErrorAction Stop | Out-Null
-    Write-Host "    installed: $($missing -join ', ')" -ForegroundColor Green
+    if (-not $FeatureSource) {
+        throw "IIS features missing ($($missing -join ', ')) and no -FeatureSource given (offline server).`nMount the Windows Server 2022/2025 ISO and re-run with -FeatureSource D:\sources\sxs (path to the 'sxs' folder on the ISO)."
+    }
+    Install-WindowsFeature -Name $missing -Source $FeatureSource -LimitAccess -IncludeManagementTools -ErrorAction Stop | Out-Null
+    Write-Host "    installed from $FeatureSource : $($missing -join ', ')" -ForegroundColor Green
 } else {
     Write-Host "    IIS features already present." -ForegroundColor Green
 }
@@ -92,12 +117,20 @@ if ($missing) {
 # --- 3. RSAT: Group Policy + AD modules (needed by the PowerShell layer) -----
 Step "Installing RSAT Group Policy Management + AD PowerShell"
 $cap = @('Rsat.GroupPolicy.Management~~~~0.0.1.0','Rsat.AdPowerShell~~~~0.0.1.0')
-foreach ($c in $cap) {
-    $state = Get-WindowsCapability -Online -Name $c -ErrorAction SilentlyContinue
-    if ($state -and $state.State -ne 'Installed') {
-        Add-WindowsCapability -Online -Name $c | Out-Null
-        Write-Host "    installed $c" -ForegroundColor Green
+$capMissing = $cap | Where-Object {
+    $state = Get-WindowsCapability -Online -Name $_ -ErrorAction SilentlyContinue
+    -not ($state -and $state.State -eq 'Installed')
+}
+if ($capMissing) {
+    if (-not $CapabilitySource) {
+        throw "RSAT capabilities missing ($($capMissing -join ', ')) and no -CapabilitySource given (offline server).`nMount the Windows Server 2022/2025 ISO and re-run with -CapabilitySource D:\ (drive letter root of the mounted ISO)."
     }
+    foreach ($c in $capMissing) {
+        Add-WindowsCapability -Online -Name $c -Source $CapabilitySource -LimitAccess | Out-Null
+        Write-Host "    installed $c from $CapabilitySource" -ForegroundColor Green
+    }
+} else {
+    Write-Host "    RSAT capabilities already present." -ForegroundColor Green
 }
 Import-Module GroupPolicy, ActiveDirectory -DisableNameChecking -ErrorAction Stop
 Write-Host "    GroupPolicy + ActiveDirectory modules load OK." -ForegroundColor Green
@@ -107,13 +140,15 @@ Step "Publishing the application to $installPath"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 if ($PublishDir) {
     if (-not (Test-Path (Join-Path $PublishDir 'FwGpoWeb.dll'))) { throw "PublishDir does not contain FwGpoWeb.dll (run `dotnet publish` first)." }
-    $source = $PublishDir
+    # copy the pre-published app into the install path (offline install)
+    Copy-Item (Join-Path $PublishDir '*') $installPath -Recurse -Force
+    Write-Host "    copied pre-published app from $PublishDir" -ForegroundColor Green
 } else {
+    if ($SelfContained) { throw "-SelfContained requires -PublishDir (publish with -r win-x64 --self-contained true on a machine that has internet)." }
     $proj = Join-Path $repoRoot 'backend\FwGpoWeb\FwGpoWeb.csproj'
     if (-not (Test-Path $proj)) { throw "Project not found at $proj - run this script from the repository's deploy folder." }
     & dotnet publish $proj -c Release -o $installPath --self-contained false
     if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed." }
-    $source = $installPath
 }
 # make sure the PowerShell module ships next to the app
 $psDst = Join-Path $installPath 'powershell\FwGpoBuilder'

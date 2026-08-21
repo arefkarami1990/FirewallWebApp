@@ -24,9 +24,10 @@ function Check($name, [bool]$ok, $detail = '') {
 
 Write-Host "`n== FwGpoWeb deployment verification ==" -ForegroundColor Cyan
 
-# 1. .NET runtime
+# 1. .NET runtime (or self-contained app - no runtime needed)
 $rt = if (Get-Command dotnet -ErrorAction SilentlyContinue) { dotnet --list-runtimes 2>$null } else { '' }
-Check ".NET 8 ASP.NET Core Runtime installed" ($rt -match 'Microsoft.AspNetCore.App 8\.')
+$selfContained = Test-Path 'C:\Program Files\FwGpoWeb\FwGpoWeb.dll'
+Check ".NET 8 ASP.NET Core Runtime installed (or self-contained app)" (($rt -match 'Microsoft.AspNetCore.App 8\.') -or $selfContained)
 
 # 2. PowerShell AD/GPO modules
 $m1 = $false; $m2 = $false
