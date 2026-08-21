@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>FwGpoWeb</RootNamespace>
+    <AssemblyName>FwGpoWeb</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <!--
+    Windows SSO (Negotiate/Kerberos + Windows auth handler) compiles only when
+    the build runs on Windows (the ref assemblies are Windows-only). The
+    app refuses AuthMode=Windows on non-Windows hosts at startup.
+  -->
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows')) == 'true'">
+    <DefineConstants>$(DefineConstants);FwGpoWindows</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows')) != 'true'">
+    <Compile Remove="Auth/WindowsAuthRegistrar.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="QRCoder" Version="1.8.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <PackageReference Include="WebAuthn.Net" Version="2.1.0" />
+  </ItemGroup>
+
+</Project>
