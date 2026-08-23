@@ -58,18 +58,24 @@ try { Import-Module ActiveDirectory -ErrorAction Stop }
 catch { throw "ActiveDirectory module not available. Run this from a domain controller or a machine with RSAT AD PowerShell (Add-WindowsCapability -Online -Name Rsat.AdPowerShell~~~~0.0.1.0)." }
 if (-not $DnsDomain) { throw "Cannot determine DNS domain; pass -DnsDomain." }
 
-# --- 1. KDS root key --------------------------------------------------------
-Step "Checking KDS root key (gMSA Kerberos prerequisite) on $(Get-ADDomain).PDCEmulator"
+# --- 1. KDS root key (informational - NEVER fatal) ---------------------------
 $domain = Get-ADDomain
+$pdc = $domain.PDCEmulator
+if (-not $pdc) { $pdc = $domain.PDC }
+if (-not $pdc) { $pdc = $domain.DNSRoot }
+Step "Checking KDS root key (gMSA Kerberos prerequisite) [PDC: $pdc]"
 try {
-    $kds = Get-ADOptionalFeature -Identity $((Get-ADDomain).DNSRoot) -Properties * -ErrorAction SilentlyContinue | Out-Null
-} catch {}
-try {
-    $kdsStatus = kdsrootkey -Get 2>&1 | Out-String
-    if ($kdsStatus -match '0x0') { Write-Host "    KDS root key present." -ForegroundColor Green }
-    else { throw "KDS root key not found. On the PDC run: kdsrootkey -Create -KeyType 0 -ValidityInYears 10 and wait for replication." }
-} catch [System.Management.Automation.CommandNotFoundException] {
-    Write-Warning "kdsrootkey tool not found on this machine (run on PDC); continuing."
+    # Correct tool name is 'kdsroot' (NOT 'kdsrootkey'). Runs only on DCs.
+    $kdsOut = & kdsroot -Get -KeyType 0 2>&1 | Out-String
+    if ($kdsOut -match '0x0') {
+        Write-Host "    KDS root key present." -ForegroundColor Green
+    }
+    else {
+        Write-Warning "KDS root key NOT found. Before gMSA logon can work, on the PDC run:`n    kdsroot -Create -KeyType 0 -ValidityInYears 10`nand wait for replication."
+    }
+} catch {
+    # kdsroot missing / not a DC / permission issue - never block the install
+    Write-Warning "Could not verify KDS root key here: $($_.Exception.Message)`nIf gMSA logon fails later, on the PDC run: kdsroot -Create -KeyType 0 -ValidityInYears 10"
 }
 
 # --- 2. create the service account -----------------------------------------
