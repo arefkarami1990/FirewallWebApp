@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds FwGpoWeb-Setup-1.0.0.exe (NSIS installer) — works on Linux (cross-build)
+# Builds FwGpoWeb-Setup-1.0.1.exe (NSIS installer) — works on Linux (cross-build)
 # or Windows (makensis + dotnet on PATH).
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 command -v dotnet >/dev/null 2>&1 || { echo "ERROR: dotnet (SDK 8) not on PATH"; exit 1; }
 command -v makensis >/dev/null 2>&1 || { echo "ERROR: makensis (NSIS 3.x) not on PATH"; exit 1; }
 
-VER="1.0.0"
+VER="1.0.1"
 echo "==> Cleaning staging/dist"
 rm -rf staging dist
 mkdir -p staging dist

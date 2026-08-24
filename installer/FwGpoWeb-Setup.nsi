@@ -5,15 +5,15 @@
 ;   self-contained .NET 8 app + Kestrel + Windows Service.
 ;   No IIS, no .NET runtime download, works air-gapped (RSAT from ISO if missing).
 ;
-; Interactive:  FwGpoWeb-Setup-1.0.0.exe
-; Silent:       FwGpoWeb-Setup-1.0.0.exe /S /ServiceIdentity=CORP\FWGPO$ /AppUrl=https://fwgpo.corp.local [/CreateGmsa=true /GmsaName=FWGPO /Port=443 /CertPfx=C:\cert.pfx /CertPfxPassword=pw /ServicePassword=pw /CapabilitySource=E:\ /InstallPath=... /DataPath=...]
+; Interactive:  FwGpoWeb-Setup-1.0.1.exe
+; Silent:       FwGpoWeb-Setup-1.0.1.exe /S /ServiceIdentity=CORP\FWGPO$ /AppUrl=https://fwgpo.corp.local [/CreateGmsa=true /GmsaName=FWGPO /Port=443 /CertPfx=C:\cert.pfx /CertPfxPassword=pw /ServicePassword=pw /CapabilitySource=E:\ /InstallPath=... /DataPath=...]
 ;   (silent values must not contain spaces)
 ;
 ; Build: makensis FwGpoWeb-Setup.nsi   (staging/ is created by build.sh / build.ps1)
 ; =============================================================================
 
 !define APP_NAME   "FwGpoWeb"
-!define APP_VER    "1.0.0"
+!define APP_VER    "1.0.1"
 !define STAGE      "$TEMP\FwGpoWebSetup"
 !define ARGSFILE   "$TEMP\FwGpoWebSetup\installer-args.txt"
 !define RESULTFILE "$TEMP\FwGpoWebSetup\setup-result.txt"
@@ -237,8 +237,6 @@ Var editSvcPwd
 Var editCertPfx
 Var editCertPwd
 Var editCapSrc
-Var editInstallPath
-Var editDataPath
 
 ; control constants (Debian's nsDialogs.nsh ships without the NSD_Create* macros)
 !define EDIT_CLS    EDIT
@@ -261,64 +259,65 @@ Function InputShow
     Abort
   ${EndIf}
 
-  nsDialogs::CreateControl ${GB_CLS} ${GB_STY} ${WS_EX_TRANSPARENT} 0 0 100% 198u "Installation parameters"
+  nsDialogs::CreateControl ${GB_CLS} ${GB_STY} ${WS_EX_TRANSPARENT} 0 0 100% 152u "Installation parameters"
   Pop $0
 
-  nsDialogs::CreateControl ${LBL_CLS} ${LBL_STY} ${LBL_EXSTY} 4u 16u 30% 12u "Service Identity  *   (DOMAIN\GMSA$$ or DOMAIN\user)"
+  nsDialogs::CreateControl ${LBL_CLS} ${LBL_STY} ${LBL_EXSTY} 4u 12u 30% 12u "Service Identity  *"
   Pop $0
-  nsDialogs::CreateControl ${EDIT_CLS} ${EDIT_STY} ${EDIT_EXSTY} 36% 16u 62% 12u $ServiceIdentity
+  nsDialogs::CreateControl ${EDIT_CLS} ${EDIT_STY} ${EDIT_EXSTY} 36% 12u 62% 12u ""
   Pop $editSI
+  ${NSD_Edit_SetCueBannerText} $editSI 0 "DOMAIN\GMSA$$  or  DOMAIN\user"
+  ${NSD_SetText} $editSI $ServiceIdentity
 
-  nsDialogs::CreateControl ${LBL_CLS} ${LBL_STY} ${LBL_EXSTY} 4u 33u 30% 12u "App URL  *   (https://fqdn, exact origin)"
+  nsDialogs::CreateControl ${LBL_CLS} ${LBL_STY} ${LBL_EXSTY} 4u 26u 30% 12u "App URL (HTTPS)  *"
   Pop $0
-  nsDialogs::CreateControl ${EDIT_CLS} ${EDIT_STY} ${EDIT_EXSTY} 36% 33u 62% 12u $AppUrl
+  nsDialogs::CreateControl ${EDIT_CLS} ${EDIT_STY} ${EDIT_EXSTY} 36% 26u 62% 12u ""
   Pop $editAppUrl
+  ${NSD_Edit_SetCueBannerText} $editAppUrl 0 "https://fwgpo.yourdomain.local  (exact origin the browser will show)"
+  ${NSD_SetText} $editAppUrl $AppUrl
 
-  nsDialogs::CreateControl ${LBL_CLS} ${LBL_STY} ${LBL_EXSTY} 4u 50u 30% 12u "HTTPS Port"
+  nsDialogs::CreateControl ${LBL_CLS} ${LBL_STY} ${LBL_EXSTY} 4u 40u 30% 12u "HTTPS Port"
   Pop $0
-  nsDialogs::CreateControl ${EDIT_CLS} ${EDIT_STY} ${EDIT_EXSTY} 36% 50u 62% 12u $Port
+  nsDialogs::CreateControl ${EDIT_CLS} ${EDIT_STY} ${EDIT_EXSTY} 36% 40u 62% 12u $Port
   Pop $editPort
 
-  nsDialogs::CreateControl ${LBL_CLS} ${LBL_STY} ${LBL_EXSTY} 4u 67u 30% 12u "GMSA Name  (when created here)"
+  nsDialogs::CreateControl ${LBL_CLS} ${LBL_STY} ${LBL_EXSTY} 4u 54u 30% 12u "GMSA Name"
   Pop $0
-  nsDialogs::CreateControl ${EDIT_CLS} ${EDIT_STY} ${EDIT_EXSTY} 36% 67u 62% 12u $GmsaName
+  nsDialogs::CreateControl ${EDIT_CLS} ${EDIT_STY} ${EDIT_EXSTY} 36% 54u 62% 12u $GmsaName
   Pop $editGmsaName
 
-  nsDialogs::CreateControl ${CHK_CLS} ${CHK_STY} 0 4u 84u 94% 12u "Create the gMSA now (this machine must be the DC or have RSAT AD + KDS)"
+  nsDialogs::CreateControl ${CHK_CLS} ${CHK_STY} 0 4u 68u 94% 12u "Create the gMSA now  (this machine must be the DC, or have RSAT AD + KDS)"
   Pop $chkGmsa
-  ${If} $CreateGmsa == "true"
-    SendMessage $chkGmsa ${BM_SETCHECK} ${BST_CHECKED} 0
-  ${EndIf}
+  ; interactive mode default is always "create gMSA" (silent mode never shows this page)
+  SendMessage $chkGmsa ${BM_SETCHECK} ${BST_CHECKED} 0
 
-  nsDialogs::CreateControl ${LBL_CLS} ${LBL_STY} ${LBL_EXSTY} 4u 101u 30% 12u "Service account password  (only if NOT a gMSA)"
+  nsDialogs::CreateControl ${LBL_CLS} ${LBL_STY} ${LBL_EXSTY} 4u 84u 30% 12u "Service password"
   Pop $0
-  nsDialogs::CreateControl ${EDIT_CLS} ${EDIT_STY} ${EDIT_EXSTY} 36% 101u 62% 12u $ServicePassword
+  nsDialogs::CreateControl ${EDIT_CLS} ${EDIT_STY} ${EDIT_EXSTY} 36% 84u 62% 12u ""
   Pop $editSvcPwd
+  ${NSD_Edit_SetCueBannerText} $editSvcPwd 0 "only if NOT a gMSA"
+  ${NSD_SetText} $editSvcPwd $ServicePassword
 
-  nsDialogs::CreateControl ${LBL_CLS} ${LBL_STY} ${LBL_EXSTY} 4u 118u 30% 12u "Certificate PFX path  (optional)"
+  nsDialogs::CreateControl ${LBL_CLS} ${LBL_STY} ${LBL_EXSTY} 4u 98u 30% 12u "Certificate PFX"
   Pop $0
-  nsDialogs::CreateControl ${EDIT_CLS} ${EDIT_STY} ${EDIT_EXSTY} 36% 118u 62% 12u $CertPfx
+  nsDialogs::CreateControl ${EDIT_CLS} ${EDIT_STY} ${EDIT_EXSTY} 36% 98u 62% 12u ""
   Pop $editCertPfx
+  ${NSD_Edit_SetCueBannerText} $editCertPfx 0 "path to your PFX  (leave blank = self-signed, dev only)"
+  ${NSD_SetText} $editCertPfx $CertPfx
 
-  nsDialogs::CreateControl ${LBL_CLS} ${LBL_STY} ${LBL_EXSTY} 4u 135u 30% 12u "Certificate PFX password"
+  nsDialogs::CreateControl ${LBL_CLS} ${LBL_STY} ${LBL_EXSTY} 4u 112u 30% 12u "PFX password"
   Pop $0
-  nsDialogs::CreateControl ${EDIT_CLS} ${EDIT_STY} ${EDIT_EXSTY} 36% 135u 62% 12u $CertPfxPassword
+  nsDialogs::CreateControl ${EDIT_CLS} ${EDIT_STY} ${EDIT_EXSTY} 36% 112u 62% 12u ""
   Pop $editCertPwd
+  ${NSD_Edit_SetCueBannerText} $editCertPwd 0 "only if a PFX is provided"
+  ${NSD_SetText} $editCertPwd $CertPfxPassword
 
-  nsDialogs::CreateControl ${LBL_CLS} ${LBL_STY} ${LBL_EXSTY} 4u 152u 30% 12u "ISO Capability Source  (offline RSAT, e.g. E:\)"
+  nsDialogs::CreateControl ${LBL_CLS} ${LBL_STY} ${LBL_EXSTY} 4u 126u 30% 12u "ISO source (offline)"
   Pop $0
-  nsDialogs::CreateControl ${EDIT_CLS} ${EDIT_STY} ${EDIT_EXSTY} 36% 152u 62% 12u $CapabilitySource
+  nsDialogs::CreateControl ${EDIT_CLS} ${EDIT_STY} ${EDIT_EXSTY} 36% 126u 62% 12u ""
   Pop $editCapSrc
-
-  nsDialogs::CreateControl ${LBL_CLS} ${LBL_STY} ${LBL_EXSTY} 4u 169u 30% 12u "Install path"
-  Pop $0
-  nsDialogs::CreateControl ${EDIT_CLS} ${EDIT_STY} ${EDIT_EXSTY} 36% 169u 62% 12u $InstallPath
-  Pop $editInstallPath
-
-  nsDialogs::CreateControl ${LBL_CLS} ${LBL_STY} ${LBL_EXSTY} 4u 186u 30% 12u "Data path"
-  Pop $0
-  nsDialogs::CreateControl ${EDIT_CLS} ${EDIT_STY} ${EDIT_EXSTY} 36% 186u 62% 12u $DataPath
-  Pop $editDataPath
+  ${NSD_Edit_SetCueBannerText} $editCapSrc 0 "root of mounted Windows ISO, e.g. E:\  (only if RSAT is missing)"
+  ${NSD_SetText} $editCapSrc $CapabilitySource
 
   nsDialogs::Show
 FunctionEnd
@@ -340,10 +339,7 @@ Function InputLeave
   Pop $CertPfxPassword
   System::Call user32::GetWindowText(p$editCapSrc,t.s,i${NSIS_MAX_STRLEN})
   Pop $CapabilitySource
-  System::Call user32::GetWindowText(p$editInstallPath,t.s,i${NSIS_MAX_STRLEN})
-  Pop $InstallPath
-  System::Call user32::GetWindowText(p$editDataPath,t.s,i${NSIS_MAX_STRLEN})
-  Pop $DataPath
+  ; InstallPath/DataPath keep their defaults (or the silent-mode values)
   SendMessage $chkGmsa ${BM_GETCHECK} 0 0 $0
   ${If} $0 == ${BST_CHECKED}
     StrCpy $CreateGmsa "true"

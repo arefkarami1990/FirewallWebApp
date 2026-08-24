@@ -48,15 +48,15 @@ IIS (Windows Authentication)  ──►  ASP.NET Core 8 (FwGpoWeb)
 ## ۳. گام‌به‌گام
 
 > ### ⚡ راه پیشنهادی: نصب‌کننده یک‌کلیک (EXE)
-> فایل `FwGpoWeb-Setup-1.0.0.exe` (در `installer/dist` یا ساخته‌شده با `installer/build.sh`)
+> فایل `FwGpoWeb-Setup-1.0.1.exe` (در `installer/dist` یا ساخته‌شده با `installer/build.sh`)
 > **تمام مراحل ۱ تا ۴ را در یک اجرا** انجام می‌دهد:
 >
 > ```
-> FwGpoWeb-Setup-1.0.0.exe        (ویزارد: هویت سرویس، آدرس سایت، گواهی، ساخت gMSA)
+> FwGpoWeb-Setup-1.0.1.exe        (ویزارد: هویت سرویس، آدرس سایت، گواهی، ساخت gMSA)
 > ```
 > یا ساکنت (بدون رابط گرافیکی):
 > ```
-> FwGpoWeb-Setup-1.0.0.exe /S /ServiceIdentity=CORP\FWGPO$ /AppUrl=https://fwgpo.corp.local [/CreateGmsa=true /CertPfx=C:\cert.pfx /CertPfxPassword=... /CapabilitySource=E:\]
+> FwGpoWeb-Setup-1.0.1.exe /S /ServiceIdentity=CORP\FWGPO$ /AppUrl=https://fwgpo.corp.local [/CreateGmsa=true /CertPfx=C:\cert.pfx /CertPfxPassword=... /CapabilitySource=E:\]
 > ```
 >
 > **مزیت اصلی حالت standalone (که EXE استفاده می‌کند):** بدون IIS و بدون دانلود

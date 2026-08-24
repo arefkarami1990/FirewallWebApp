@@ -1,12 +1,12 @@
 # 📋 راهنمای گام‌به‌گام نصب — سرور بدون اینترنت (Air-Gapped)
 
 > ### 🚀 ساده‌ترین راه آفلاین: نصب‌کننده EXE
-> فایل **`FwGpoWeb-Setup-1.0.0.exe`** (از `installer/dist` یا با `installer/build.sh`
+> فایل **`FwGpoWeb-Setup-1.0.1.exe`** (از `installer/dist` یا با `installer/build.sh`
 > ساخته‌شده) خودش اپ self-contained + اسکریپت‌ها را حمل می‌کند — یعنی **فقط یک فایل
 > روی USB** کافی است (نیاز به publish جدا، ران‌تایم جدا و ISO برای .NET نیست):
 >
 > ```
-> D:\FwGpoOffline\FwGpoWeb-Setup-1.0.0.exe
+> D:\FwGpoOffline\FwGpoWeb-Setup-1.0.1.exe
 > ```
 > ویزارد از شما فقط می‌پرسد: هویت سرویس، آدرس HTTPS سایت، گواهی (PFX یا self-signed)
 > و در صورت نبودن RSAT روی سرور، درایو ISO مانت‌شده (Capability Source).
