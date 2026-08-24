@@ -47,6 +47,28 @@ IIS (Windows Authentication)  ──►  ASP.NET Core 8 (FwGpoWeb)
 
 ## ۳. گام‌به‌گام
 
+> ### ⚡ راه پیشنهادی: نصب‌کننده یک‌کلیک (EXE)
+> فایل `FwGpoWeb-Setup-1.0.0.exe` (در `installer/dist` یا ساخته‌شده با `installer/build.sh`)
+> **تمام مراحل ۱ تا ۴ را در یک اجرا** انجام می‌دهد:
+>
+> ```
+> FwGpoWeb-Setup-1.0.0.exe        (ویزارد: هویت سرویس، آدرس سایت، گواهی، ساخت gMSA)
+> ```
+> یا ساکنت (بدون رابط گرافیکی):
+> ```
+> FwGpoWeb-Setup-1.0.0.exe /S /ServiceIdentity=CORP\FWGPO$ /AppUrl=https://fwgpo.corp.local [/CreateGmsa=true /CertPfx=C:\cert.pfx /CertPfxPassword=... /CapabilitySource=E:\]
+> ```
+>
+> **مزیت اصلی حالت standalone (که EXE استفاده می‌کند):** بدون IIS و بدون دانلود
+> runtime — اپ self-contained است و به‌صورت **سرویس ویندوز + Kestrel** با **SSO کربروس
+> بومی** (handler Negotiate) اجرا می‌شود. برای سرور آفلاین فقط در صورت نبودن RSAT،
+> ISO مانت‌شده لازم است (فیلد *Capability Source*).
+>
+> خروجی نهایی: صفحه‌ی PASS/FAIL برای ۱۰ راستی‌آزمایی (فایل‌ها، ماژول، سرویس، هویت،
+> gMSA، کانفیگ، گواهی، ACL، HTTPS، اتصال به DC).
+>
+> ادامه این بخش، راه **دستی** (IIS) است — اگر از EXE استفاده کردید نیازی به آن‌ها نیست.
+
 ### گام ۱ — ساخت gMSA (روی DC یا ماشینی با RSAT AD)
 
 ```powershell

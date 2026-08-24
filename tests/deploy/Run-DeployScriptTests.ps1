@@ -211,5 +211,184 @@ $r = Invoke-DeployChild (Join-Path $deployDir 'Uninstall-FwGpoWeb.ps1') `
 Assert ($r.ExitCode -eq 0 -and (Test-Path $dataDir) -and ($r.Out -match 'Keeping')) "U2 data dir kept without -RemoveData"
 
 Write-Host ""
+# ============================================================================
+Write-Host "`n== Installer (EXE orchestration: Install-FromInstaller.ps1) ==" -ForegroundColor Cyan
+
+$installerDir = Join-Path (Split-Path -Parent $root) 'installer'
+$stageBase = Join-Path $tempRoot "fwgpo-installer-$PID"
+New-Item -ItemType Directory -Force $stageBase | Out-Null
+
+function New-InstallerStage {
+    param([string]$Tag, [hashtable]$PubFiles = @{})
+    $stage = Join-Path $stageBase $Tag
+    if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+    $app = Join-Path $stage 'app'
+    New-Item -ItemType Directory -Force $app | Out-Null
+    foreach ($kv in $PubFiles.GetEnumerator()) { Set-Content (Join-Path $app $kv.Key) $kv.Value }
+    Copy-Item (Join-Path $deployDir 'New-Gmsa.ps1') (Join-Path $stage 'deploy.tmp') -Force
+    New-Item -ItemType Directory -Force (Join-Path $stage 'deploy') | Out-Null
+    Move-Item (Join-Path $stage 'deploy.tmp') (Join-Path $stage 'deploy\New-Gmsa.ps1') -Force
+    New-Item -ItemType Directory -Force (Join-Path $stage 'installer') | Out-Null
+    Copy-Item (Join-Path $installerDir 'Install-FwGpoWeb-Service.ps1') (Join-Path $stage 'installer\') -Force
+    Copy-Item (Join-Path $installerDir 'Verify-FwGpoWeb-Service.ps1') (Join-Path $stage 'installer\') -Force
+    New-Item -ItemType Directory -Force (Join-Path $stage 'powershell\FwGpoBuilder') | Out-Null
+    Copy-Item (Join-Path (Split-Path -Parent $root) 'powershell\FwGpoBuilder\*') (Join-Path $stage 'powershell\FwGpoBuilder\') -Recurse -Force
+    return $stage
+}
+function New-ArgsFile {
+    param([string]$Stage, [hashtable]$Override = @{})
+    $base = [ordered]@{
+        ServiceIdentity = 'CORP\FWGPO$'
+        AppUrl = 'https://fwgpo.rfkarami.ir'
+        Port = 443
+        CertPfx = ''
+        CertPfxPassword = ''
+        ServicePassword = ''
+        CapabilitySource = ''
+        CreateGmsa = 'false'
+        GmsaName = 'FWGPO'
+        InstallPath = ''
+        DataPath = ''
+    }
+    foreach ($kv in $Override.GetEnumerator()) { $base[[string]$kv.Key] = $kv.Value }
+    $lines = $base.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }
+    $file = Join-Path $Stage 'installer-args.txt'
+    Set-Content -Path $file -Value $lines -Encoding utf8
+    return $file
+}
+
+# T1: full happy path — create gMSA + install (self-signed cert) + verify
+$t1stage = New-InstallerStage 't1' @{ 'FwGpoWeb.dll' = 'fake-dll'; 'FwGpoWeb.exe' = 'fake-exe' }
+$t1install = Join-Path $t1stage 'install'; $t1data = Join-Path $t1stage 'data'
+$t1file = New-ArgsFile $t1stage @{ CreateGmsa = 'true'; InstallPath = $t1install; DataPath = $t1data }
+$r = Invoke-DeployChild (Join-Path $installerDir 'Install-FromInstaller.ps1') `
+    "-StageDir '$t1stage' -ArgsFile '$t1file'" `
+    @{ FwGpoWebStubKds='present'; FwGpoWebStubRsatMissing='false'; FwGpoWebStubHealth='ok' }
+Assert ($r.ExitCode -eq 0) "T1 full install exits 0" "exit=$($r.ExitCode) out=$($r.Out.Substring(0,[Math]::Min(500,$r.Out.Length)))"
+$t1result = if (Test-Path (Join-Path $t1stage 'setup-result.txt')) { (Get-Content (Join-Path $t1stage 'setup-result.txt') -Raw) } else { '' }
+Assert ($t1result -match 'STATUS=OK') "T1 result file STATUS=OK" "result=$t1result"
+Assert (Call-Matched $r.Calls '^New-ADServiceAccount.*spn=HTTP/fwgpo.rfkarami.ir') "T1 gMSA created with SPN from AppUrl host" "calls=$($r.Calls -join ' | ')"
+Assert (Call-Matched $r.Calls '^Add-ADGroupMember.*Domain Admins') "T1 gMSA granted to Domain Admins"
+Assert (Call-Matched $r.Calls '^New-Service') "T1 Windows service created"
+Assert (Call-Matched $r.Calls '^sc\.exe.*obj=CORP.*FWGPO') "T1 service account set to gMSA (sc config obj=)"
+Assert (Call-Matched $r.Calls '^Start-Service.*FwGpoWeb') "T1 service started"
+Assert (Call-Matched $r.Calls '^New-SelfSignedCertificate.*fwgpo.rfkarami.ir') "T1 self-signed cert created (no cert given)"
+Assert (Call-Matched $r.Calls '^Export-PfxCertificate') "T1 cert exported to PFX"
+Assert (Call-Matched $r.Calls '^Invoke-WebRequest.*https://localhost:443/api/health') "T1 smoke test ran (install + verify)" "calls=$($r.Calls -join ' | ')"
+$t1prod = Join-Path $t1install 'appsettings.Production.json'
+Assert (Test-Path $t1prod) "T1 production config written"
+if (Test-Path $t1prod) {
+    $cfg = Get-Content $t1prod -Raw | ConvertFrom-Json
+    Assert ($cfg.App.Hosting -eq 'Kestrel') "T1 config Hosting=Kestrel" "got=$($cfg.App.Hosting)"
+    Assert ($cfg.App.KestrelUrl -eq 'https://0.0.0.0:443') "T1 config KestrelUrl" "got=$($cfg.App.KestrelUrl)"
+    Assert (($cfg.WebAuthn.Origins -join ',') -eq 'https://fwgpo.rfkarami.ir') "T1 config exact WebAuthn origin"
+    Assert ([bool]$cfg.App.KestrelCert.Path) "T1 config KestrelCert:Path set"
+    Assert ([bool]$cfg.App.KestrelCert.PasswordFile) "T1 config KestrelCert:PasswordFile set"
+    Assert (-not (($cfg | ConvertTo-Json) -match 'app\.pass.*[A-Za-z0-9]{16,}')) "T1 no PFX password in world-readable config"
+}
+
+# T2: gMSA already exists — creation skipped, install-only
+$t2stage = New-InstallerStage 't2' @{ 'FwGpoWeb.dll' = 'fake-dll'; 'FwGpoWeb.exe' = 'fake-exe' }
+$t2file = New-ArgsFile $t2stage @{ InstallPath = (Join-Path $t2stage 'install'); DataPath = (Join-Path $t2stage 'data') }
+$r = Invoke-DeployChild (Join-Path $installerDir 'Install-FromInstaller.ps1') `
+    "-StageDir '$t2stage' -ArgsFile '$t2file'" `
+    @{ FwGpoWebStubRsatMissing='false'; FwGpoWebStubHealth='ok' }
+Assert ($r.ExitCode -eq 0) "T2 install-only exits 0" "exit=$($r.ExitCode)"
+Assert (-not (Call-Matched $r.Calls '^New-ADServiceAccount')) "T2 no gMSA created when CreateGmsa=false"
+Assert (Call-Matched $r.Calls '^Test-ADServiceAccount.*FWGPO') "T2 gMSA install-state checked"
+
+# T3: gMSA not installed on machine -> hard stop with clear error
+$t3stage = New-InstallerStage 't3' @{ 'FwGpoWeb.dll' = 'fake-dll'; 'FwGpoWeb.exe' = 'fake-exe' }
+$t3file = New-ArgsFile $t3stage @{ InstallPath = (Join-Path $t3stage 'install'); DataPath = (Join-Path $t3stage 'data') }
+$r = Invoke-DeployChild (Join-Path $installerDir 'Install-FromInstaller.ps1') `
+    "-StageDir '$t3stage' -ArgsFile '$t3file'" `
+    @{ FwGpoWebStubRsatMissing='false'; FwGpoWebStubGmsaTest='notinstalled'; FwGpoWebStubHealth='ok' }
+$t3result = if (Test-Path (Join-Path $t3stage 'setup-result.txt')) { (Get-Content (Join-Path $t3stage 'setup-result.txt') -Raw) } else { '' }
+Assert ($r.ExitCode -ne 0) "T3 uninstalled gMSA -> non-zero exit" "exit=$($r.ExitCode)"
+Assert ($t3result -match 'STATUS=FAIL' -and $t3result -match 'install') "T3 result file STATUS=FAIL at install stage" "result=$t3result"
+Assert ($r.Out -match 'not installed on this machine') "T3 clear gMSA error message"
+
+# T4: RSAT missing + no CapabilitySource -> ISO hint
+$t4stage = New-InstallerStage 't4' @{ 'FwGpoWeb.dll' = 'fake-dll'; 'FwGpoWeb.exe' = 'fake-exe' }
+$t4file = New-ArgsFile $t4stage @{ InstallPath = (Join-Path $t4stage 'install'); DataPath = (Join-Path $t4stage 'data') }
+$r = Invoke-DeployChild (Join-Path $installerDir 'Install-FromInstaller.ps1') `
+    "-StageDir '$t4stage' -ArgsFile '$t4file'" `
+    @{ FwGpoWebStubRsatMissing='true'; FwGpoWebStubHealth='ok' }
+Assert ($r.ExitCode -ne 0 -and $r.Out -match 'CapabilitySource' -and $r.Out -match 'ISO') "T4 missing RSAT + no source -> ISO hint" "out=$($r.Out.Substring(0,[Math]::Min(400,$r.Out.Length)))"
+
+# T5: RSAT missing + CapabilitySource -> installed from ISO, install succeeds
+$t5stage = New-InstallerStage 't5' @{ 'FwGpoWeb.dll' = 'fake-dll'; 'FwGpoWeb.exe' = 'fake-exe' }
+$t5file = New-ArgsFile $t5stage @{ CapabilitySource = 'E:\'; InstallPath = (Join-Path $t5stage 'install'); DataPath = (Join-Path $t5stage 'data') }
+$r = Invoke-DeployChild (Join-Path $installerDir 'Install-FromInstaller.ps1') `
+    "-StageDir '$t5stage' -ArgsFile '$t5file'" `
+    @{ FwGpoWebStubRsatMissing='true'; FwGpoWebStubHealth='ok' }
+Assert ($r.ExitCode -eq 0) "T5 offline RSAT from ISO exits 0" "exit=$($r.ExitCode) out=$($r.Out.Substring(0,[Math]::Min(400,$r.Out.Length)))"
+Assert (Call-Matched $r.Calls '^Add-WindowsCapability.*Rsat\.GroupPolicy\.Management') "T5 GPMC capability installed from ISO"
+Assert (Call-Matched $r.Calls '^Add-WindowsCapability.*Rsat\.AdPowerShell') "T5 AD PowerShell capability installed from ISO"
+
+# T6: user-provided PFX is used (no self-signed generated)
+$t6stage = New-InstallerStage 't6' @{ 'FwGpoWeb.dll' = 'fake-dll'; 'FwGpoWeb.exe' = 'fake-exe' }
+$t6pfx = Join-Path $t6stage 'mycert.pfx'; 'real-pfx' | Set-Content $t6pfx
+$t6file = New-ArgsFile $t6stage @{ CertPfx = $t6pfx; CertPfxPassword = 'hunter2'; InstallPath = (Join-Path $t6stage 'install'); DataPath = (Join-Path $t6stage 'data') }
+$r = Invoke-DeployChild (Join-Path $installerDir 'Install-FromInstaller.ps1') `
+    "-StageDir '$t6stage' -ArgsFile '$t6file'" `
+    @{ FwGpoWebStubRsatMissing='false'; FwGpoWebStubHealth='ok' }
+Assert ($r.ExitCode -eq 0) "T6 provided PFX install exits 0" "exit=$($r.ExitCode)"
+Assert (-not (Call-Matched $r.Calls '^New-SelfSignedCertificate')) "T6 no self-signed cert when PFX provided"
+$t6pfxDst = (Join-Path (Join-Path (Join-Path $t6stage 'data') 'certs') 'app.pfx')
+Assert ((Test-Path $t6pfxDst) -and ((Get-Content $t6pfxDst -Raw).Trim() -eq 'real-pfx')) "T6 PFX copied into ACL-restricted data dir"
+
+# T7: smoke test failure -> install fails (service starts but app unhealthy)
+$t7stage = New-InstallerStage 't7' @{ 'FwGpoWeb.dll' = 'fake-dll'; 'FwGpoWeb.exe' = 'fake-exe' }
+$t7file = New-ArgsFile $t7stage @{ InstallPath = (Join-Path $t7stage 'install'); DataPath = (Join-Path $t7stage 'data') }
+$r = Invoke-DeployChild (Join-Path $installerDir 'Install-FromInstaller.ps1') `
+    "-StageDir '$t7stage' -ArgsFile '$t7file'" `
+    @{ FwGpoWebStubRsatMissing='false'; FwGpoWebStubHealth='fail' }
+Assert ($r.ExitCode -ne 0) "T7 unhealthy app -> non-zero exit" "exit=$($r.ExitCode)"
+$t7result = if (Test-Path (Join-Path $t7stage 'setup-result.txt')) { (Get-Content (Join-Path $t7stage 'setup-result.txt') -Raw) } else { '' }
+Assert ($t7result -match 'STATUS=FAIL') "T7 result file STATUS=FAIL"
+
+# T8: service fails to reach Running -> clear error
+$t8stage = New-InstallerStage 't8' @{ 'FwGpoWeb.dll' = 'fake-dll'; 'FwGpoWeb.exe' = 'fake-exe' }
+$t8file = New-ArgsFile $t8stage @{ InstallPath = (Join-Path $t8stage 'install'); DataPath = (Join-Path $t8stage 'data') }
+$r = Invoke-DeployChild (Join-Path $installerDir 'Install-FromInstaller.ps1') `
+    "-StageDir '$t8stage' -ArgsFile '$t8file'" `
+    @{ FwGpoWebStubRsatMissing='false'; FwGpoWebStubSvcState='Failed'; FwGpoWebStubHealth='ok' }
+Assert ($r.ExitCode -ne 0 -and $r.Out -match 'did not reach Running') "T8 service not running -> clear error" "out=$($r.Out.Substring(0,[Math]::Min(400,$r.Out.Length)))"
+
+# T9: domain user identity (no gMSA) — password required, no gMSA checks
+$t9stage = New-InstallerStage 't9' @{ 'FwGpoWeb.dll' = 'fake-dll'; 'FwGpoWeb.exe' = 'fake-exe' }
+$t9file = New-ArgsFile $t9stage @{ ServiceIdentity = 'CORP\jdoe'; ServicePassword = 'pw123'; InstallPath = (Join-Path $t9stage 'install'); DataPath = (Join-Path $t9stage 'data') }
+$r = Invoke-DeployChild (Join-Path $installerDir 'Install-FromInstaller.ps1') `
+    "-StageDir '$t9stage' -ArgsFile '$t9file'" `
+    @{ FwGpoWebStubRsatMissing='false'; FwGpoWebStubHealth='ok'; FwGpoWebStubSvcStartName='CORP\jdoe'; FwGpoWebStubAclIdentity='CORP\jdoe' }
+Assert ($r.ExitCode -eq 0) "T9 domain user identity exits 0" "exit=$($r.ExitCode) out=$($r.Out.Substring(0,[Math]::Min(400,$r.Out.Length)))"
+Assert (Call-Matched $r.Calls '^sc\.exe.*obj=CORP\\jdoe.*password=pw123') "T9 sc config obj= + password= for domain user"
+Assert (-not (Call-Matched $r.Calls '^Test-ADServiceAccount')) "T9 no gMSA check for user identity"
+
+# T10: publish dir without FwGpoWeb.exe (not self-contained) -> clear error
+$t10stage = New-InstallerStage 't10' @{ 'FwGpoWeb.dll' = 'fake-dll' }
+$t10file = New-ArgsFile $t10stage @{ InstallPath = (Join-Path $t10stage 'install'); DataPath = (Join-Path $t10stage 'data') }
+$r = Invoke-DeployChild (Join-Path $installerDir 'Install-FromInstaller.ps1') `
+    "-StageDir '$t10stage' -ArgsFile '$t10file'" `
+    @{ FwGpoWebStubRsatMissing='false'; FwGpoWebStubHealth='ok' }
+Assert ($r.ExitCode -ne 0 -and $r.Out -match 'SELF-CONTAINED') "T10 non-self-contained publish rejected with hint" "out=$($r.Out.Substring(0,[Math]::Min(400,$r.Out.Length)))"
+
+# T11: standalone verify script on T1's good install state -> all PASS, exit 0
+$r = Invoke-DeployChild (Join-Path $installerDir 'Verify-FwGpoWeb-Service.ps1') `
+    "-ServiceIdentity 'CORP\FWGPO`$' -AppUrl 'https://fwgpo.rfkarami.ir' -Port 443 -InstallPath '$t1install' -DataPath '$t1data'" `
+    @{ FwGpoWebStubHealth='ok'; FwGpoWebStubSvcExists='true' }
+Assert ($r.ExitCode -eq 0) "T11 verify on good install exits 0" "exit=$($r.ExitCode) out=$($r.Out)"
+$passCount = @(($r.Out -split "`n") | Where-Object { $_ -match '^PASS' }).Count
+Assert ($passCount -ge 9) "T11 verify runs >=9 checks all PASS" "passCount=$passCount"
+Assert ($r.Out -match 'PASS.*DC reachable via PowerShell bridge') "T11 DC ping check passed"
+
+# T12: verify on a BAD install state (unhealthy app) -> non-zero exit with FAIL lines
+$r = Invoke-DeployChild (Join-Path $installerDir 'Verify-FwGpoWeb-Service.ps1') `
+    "-ServiceIdentity 'CORP\FWGPO`$' -AppUrl 'https://fwgpo.rfkarami.ir' -Port 443 -InstallPath '$t1install' -DataPath '$t1data'" `
+    @{ FwGpoWebStubHealth='fail' }
+Assert ($r.ExitCode -ne 0) "T12 verify with failing health exits non-zero" "exit=$($r.ExitCode)"
+Assert (@(($r.Out -split "`n") | Where-Object { $_ -match '^FAIL.*HTTPS health' }).Count -gt 0) "T12 failing check reported as FAIL" 
+
 Write-Host ("RESULT: {0} passed, {1} failed" -f $script:Pass, $script:Fail) -ForegroundColor $(if ($script:Fail -eq 0) { 'Green' } else { 'Red' })
 exit $(if ($script:Fail -eq 0) { 0 } else { 1 })

@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FW-GPO Builder</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="topbar">
+    <div class="brand"><span class="shield">&#x1F6E1;</span> FW-GPO Builder <span class="ver">v1.0</span></div>
+    <div id="userbox" class="hidden">
+      <span id="userLabel" class="userlabel"></span>
+      <span id="mfaBadge" class="badge"></span>
+      <button id="btnSetup" class="ghost" title="MFA / FIDO2 setup">MFA Setup</button>
+      <button id="btnLogout" class="ghost">Log out</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- SSO welcome -->
+    <section id="view-welcome" class="view hidden">
+      <div class="card center">
+        <h1>Windows SSO required</h1>
+        <p>This console authenticates with your <b>domain identity (Kerberos SSO)</b>. Open it from a domain-joined browser (intranet zone) and continue below. Your Windows session is used &mdash; no password entry.</p>
+        <button id="btnSso" class="primary big">Continue with Windows</button>
+        <p id="ssoError" class="error hidden"></p>
+      </div>
+    </section>
+
+    <!-- MFA -->
+    <section id="view-mfa" class="view hidden">
+      <div class="card">
+        <h1>Two-factor verification</h1>
+        <p id="mfaHint">Verify with your second factor to continue. (TOTP app or FIDO2 key / fingerprint.)</p>
+        <div class="row">
+          <button id="btnMfaTotp" class="primary">&#x1F4F1; TOTP code</button>
+          <button id="btnMfaFido" class="primary">&#x1F511; FIDO2 / Fingerprint</button>
+        </div>
+        <div id="totpBox" class="hidden subbox">
+          <label for="totpCode">6-digit code from your authenticator app</label>
+          <div class="row">
+            <input id="totpCode" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="123456" autocomplete="one-time-code">
+            <button id="btnTotpSubmit" class="primary">Verify</button>
+          </div>
+        </div>
+        <div id="fidoBox" class="hidden subbox">
+          <button id="btnFidoMfa" class="primary">Authenticate with key / fingerprint</button>
+          <p class="hint">Touch your FIDO2 security key or the biometric sensor (Windows Hello fingerprint).</p>
+        </div>
+        <p id="mfaError" class="error hidden"></p>
+        <p class="hint" id="noMfaNote" style="margin-top:10px">No second factor registered yet? Go to <a href="#" id="linkMfaSetup">MFA Setup</a>.</p>
+      </div>
+    </section>
+
+    <!-- MFA setup -->
+    <section id="view-setup" class="view hidden">
+      <div class="card">
+        <h1>Security setup</h1>
+        <div class="grid2">
+          <div class="panel">
+            <h2>&#x1F4F1; TOTP (authenticator app)</h2>
+            <div id="totpSetupWrap">
+              <p>Scan the QR code with Google Authenticator / Authy / 1Password, or enter the secret manually.</p>
+              <img id="totpQr" alt="TOTP QR code" class="hidden">
+              <p>Manual secret: <code id="totpSecretText"></code></p>
+              <div class="row">
+                <input id="totpSetupCode" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="confirm code">
+                <button id="btnTotpConfirm" class="primary">Confirm &amp; save</button>
+                <button id="btnTotpRegen" class="ghost">New QR</button>
+              </div>
+            </div>
+            <p id="totpSetupStatus" class="hint"></p>
+          </div>
+          <div class="panel">
+            <h2>&#x1F511; FIDO2 / Fingerprint (Windows Hello)</h2>
+            <p>Register a FIDO2 security key or a platform biometric (fingerprint / face). Registered credentials can be used as your second factor.</p>
+            <button id="btnFidoReg" class="primary">Register credential</button>
+            <p class="hint">Touch your key or use the fingerprint sensor when prompted.</p>
+            <div id="fidoList"></div>
+          </div>
+        </div>
+        <p id="setupError" class="error hidden"></p>
+        <p class="row" style="margin-top:14px">
+          <button id="btnBack" class="ghost">&larr; Back</button>
+        </p>
+      </div>
+    </section>
+
+    <!-- Forbidden -->
+    <section id="view-forbidden" class="view hidden">
+      <div class="card center">
+        <h1>Access denied</h1>
+        <p id="forbiddenMsg">You are authenticated but not a member of the admin group.</p>
+      </div>
+    </section>
+
+    <!-- Main builder -->
+    <section id="view-main" class="view hidden">
+      <!-- 1. OU -->
+      <div class="card">
+        <h2>1. Target OU</h2>
+        <div class="row">
+          <input id="ouDn" class="mono grow" placeholder="OU=Servers,DC=corp,DC=local">
+          <button id="btnPickOu" class="ghost">Browse AD</button>
+        </div>
+      </div>
+
+      <!-- 2. Service -->
+      <div class="card">
+        <h2>2. Service (port &amp; protocol)</h2>
+        <div class="row wrap">
+          <div class="field"><label>Port</label><input id="port" class="mono" value="3389"></div>
+          <div class="field"><label>Protocol</label>
+            <select id="protocol">
+              <option value="TCP">TCP</option>
+              <option value="UDP">UDP</option>
+              <option value="Any">Any (TCP+UDP)</option>
+            </select>
+          </div>
+          <div class="field"><label>Preset</label>
+            <select id="preset">
+              <option value="custom">Custom</option>
+              <option value="3389">RDP (TCP/3389)</option>
+              <option value="22">SSH (TCP/22)</option>
+              <option value="21">FTP (TCP/21)</option>
+              <option value="445">SMB (TCP/445)</option>
+              <option value="5985">WinRM (TCP/5985)</option>
+              <option value="80">HTTP (TCP/80)</option>
+              <option value="443">HTTPS (TCP/443)</option>
+              <option value="53">DNS (TCP+UDP/53)</option>
+              <option value="Any">Any Port</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Existing policy -->
+      <div class="card warn">
+        <h2>Existing policy <span class="hint">(mandatory before Validate)</span></h2>
+        <p class="hint">Search finds an existing GPO for this OU/port and loads its current allowed IPs for editing.</p>
+        <div class="row wrap">
+          <input id="existingName" class="mono grow" readonly>
+          <button id="btnSearch" class="primary">Search &amp; load IPs</button>
+          <button id="btnListGpos" class="ghost">List all GPOs</button>
+        </div>
+        <p id="searchStatus" class="status"></p>
+      </div>
+
+      <!-- 3. Sources -->
+      <div class="card">
+        <h2>3. Source selection</h2>
+        <label class="radio"><input type="radio" name="srcmode" value="specific" checked> Specific IP list (below)</label>
+        <label class="radio"><input type="radio" name="srcmode" value="any"> Any &mdash; allow ALL IPs (no block rules)</label>
+        <label class="radio"><input type="radio" name="srcmode" value="localsubnet"> Block Local Subnet only</label>
+        <div id="specificBox">
+          <label for="addresses" class="muted">IP list &mdash; one per line: <span class="mono">10.0.0.5</span> | <span class="mono">10.1.0.0/24</span> | <span class="mono">10.2.0.1-10.2.0.9</span></label>
+          <textarea id="addresses" class="mono" rows="7" spellcheck="false"></textarea>
+          <p><span id="addrCount" class="status">0 valid</span> <span id="addrInvalid" class="status err"></span></p>
+          <label class="check"><input type="checkbox" id="blockOthers" checked> Also <b>Block all other IPs</b> except the listed (complement rules, no overlap)</label>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="card">
+        <h2>Actions</h2>
+        <div class="row">
+          <button id="btnValidate" class="primary" disabled>1. Validate</button>
+          <button id="btnApply" class="danger" disabled>2. Apply &mdash; delete old &amp; rebuild</button>
+        </div>
+        <p id="validateStatus" class="status"></p>
+        <p id="applyStatus" class="status"></p>
+      </div>
+
+      <!-- Log -->
+      <div class="card">
+        <h2>Log</h2>
+        <pre id="log" class="log">Ready.</pre>
+      </div>
+    </section>
+  </main>
+
+  <!-- OU picker modal -->
+  <div id="modal" class="modal hidden">
+    <div class="modalbox">
+      <h2>Select OU</h2>
+      <div class="row" style="margin-bottom:8px">
+        <input id="ouFilter" placeholder="filter..." class="grow">
+      </div>
+      <ul id="ouList" class="oulist"></ul>
+      <div class="row" style="margin-top:10px">
+        <button id="btnOuCancel" class="ghost">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

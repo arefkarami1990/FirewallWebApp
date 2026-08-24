@@ -24,3 +24,7 @@ Thumbs.db
 .vscode/
 .idea/
 __pycache__/
+
+# installer build artifacts
+installer/staging/
+installer/dist/

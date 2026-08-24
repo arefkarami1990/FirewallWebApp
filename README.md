@@ -54,10 +54,38 @@ python3 tests/pentest/pentest.py
 pwsh tests/deploy/Run-DeployScriptTests.ps1
 ```
 
-**Total: 242 automated tests. All green as of 2026-08-23 — see [docs/PENTEST-REPORT.md](docs/PENTEST-REPORT.md).**
+**Total: 295 automated tests (71 C# unit + 80 PowerShell core + 88 deploy/installer
+scenarios + 56 E2E/pentest, incl. a real Kestrel HTTPS/PFX test). All green as of
+2026-08-24 — see [docs/PENTEST-REPORT.md](docs/PENTEST-REPORT.md).**
 
-## Installation
+## Installation — one-click installer (recommended)
 
+**`installer/`** builds a single self-contained EXE — `FwGpoWeb-Setup-1.0.0.exe` — that runs the whole installation:
+
+```
+FwGpoWeb-Setup-1.0.0.exe                       ; wizard (service identity, App URL, cert, gMSA)
+FwGpoWeb-Setup-1.0.0.exe /S /ServiceIdentity=CORP\FWGPO$ /AppUrl=https://fwgpo.corp.local
+```
+
+What it does in one pass:
+1. (optional) creates the **gMSA** with the correct SPN + Domain Admins grant
+2. installs the **self-contained .NET 8 app** (no runtime download — works air-gapped;
+   RSAT is installed from a mounted ISO via the *Capability Source* field when missing)
+3. provisions the **HTTPS certificate** as PFX inside the ACL-restricted data dir
+   (your PFX, a store cert by thumbprint, or a generated self-signed for dev)
+4. registers + starts the **Windows service** under your identity (gMSA$ or domain user)
+5. runs the **full verification** (10 checks) and shows a PASS/FAIL report
+
+Architecture of the standalone mode: **Kestrel self-hosted + Windows Service + native
+Kerberos SSO (Negotiate handler)** — no IIS, no ASP.NET Core Module. The IIS path
+(`deploy/Install-FwGpoWeb.ps1`) remains available for IIS-based deployments.
+
+Rebuild the installer (Linux or Windows, needs .NET 8 SDK + NSIS 3):
+```bash
+cd installer && ./build.sh        # or: .\build.ps1  on Windows
+```
+
+Full guides:
 - Online: [docs/fa/DEPLOYMENT.md](docs/fa/DEPLOYMENT.md)
 - **Offline / air-gapped (server without internet):** [docs/fa/INSTALL-OFFLINE.md](docs/fa/INSTALL-OFFLINE.md)
 

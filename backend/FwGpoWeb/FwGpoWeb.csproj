@@ -12,15 +12,24 @@
   </PropertyGroup>
 
   <!--
-    Windows SSO (Negotiate/Kerberos + Windows auth handler) compiles only when
-    the build runs on Windows (the ref assemblies are Windows-only). The
-    app refuses AuthMode=Windows on non-Windows hosts at startup.
+    Windows SSO (Negotiate/Kerberos + Windows auth handler) compiles for
+    Windows: either a Windows build host, or any build targeting a win RID
+    (e.g. `dotnet publish -r win-x64` on Linux CI). The handler assemblies
+    ship in the shared framework ref pack for all RIDs; the app additionally
+    refuses AuthMode=Windows at runtime on non-Windows hosts.
   -->
-  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows')) == 'true'">
+  <PropertyGroup Condition="$(RuntimeIdentifier.StartsWith('win')) == 'true' OR $([MSBuild]::IsOSPlatform('Windows')) == 'true'">
     <DefineConstants>$(DefineConstants);FwGpoWindows</DefineConstants>
   </PropertyGroup>
-  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows')) != 'true'">
+  <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('win')) != 'true' AND $([MSBuild]::IsOSPlatform('Windows')) != 'true'">
     <Compile Remove="Auth/WindowsAuthRegistrar.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('win')) == 'true' OR $([MSBuild]::IsOSPlatform('Windows')) == 'true'">
+    <!-- Windows-only SSO handler (Kerberos/NTLM via OS security packages).
+         Per the official .NET 8 docs, Negotiate is used for both IIS and
+         self-hosted (Kestrel) deployments. -->
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.Negotiate" Version="8.0.30" />
   </ItemGroup>
 
   <ItemGroup>

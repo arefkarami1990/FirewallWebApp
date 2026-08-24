@@ -7,7 +7,6 @@ using FwGpoWeb.Security;
 using FwGpoWeb.Services;
 #if FwGpoWindows
 using Microsoft.AspNetCore.Authentication.Negotiate;
-using Microsoft.AspNetCore.Authentication.Windows;
 #endif
 using WebAuthn.Net.Configuration.DependencyInjection;
 
@@ -28,8 +27,11 @@ Directory.CreateDirectory(dataDir);
 // ---------------------------------------------------------------------------
 if (hosting.Equals("Kestrel", StringComparison.OrdinalIgnoreCase))
 {
-    var url = appCfg["KestrelUrl"] ?? "http://0.0.0.0:5000";
-    builder.WebHost.UseUrls(url);
+    // KestrelCertConfig.Apply() binds HTTPS with the PFX from config when
+    // App:KestrelCert:Path is set (self-hosted production), or App:KestrelUrl
+    // as-is otherwise (dev). The PFX password is read from a file inside the
+    // ACL-restricted data dir — never from the world-readable settings file.
+    FwGpoWeb.Security.KestrelCertConfig.Apply(builder, appCfg);
 }
 
 // ---------------------------------------------------------------------------

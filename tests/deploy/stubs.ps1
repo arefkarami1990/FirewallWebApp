@@ -136,6 +136,64 @@ function kdsroot {
     Write-Output "Root Key Version: 0x0, Root Key Version TimeStamp: 2026-01-01"
 }
 
+# --- Windows services (standalone/Kestrel mode) ---------------------------------
+# Env controls:
+#   FwGpoWebStubSvcExists    = true|false   service pre-exists (installed state)
+#   FwGpoWebStubSvcState     = Running|Stopped|Failed   forced state after start
+#   FwGpoWebStubSvcStartName = account shown by Win32_Service StartName
+$global:StubServices = @{}
+function New-Service {
+    param([string]$Name, [string]$BinaryPathName, [string]$DisplayName, $StartupType)
+    Stub-Log "New-Service" "$Name binPath=$BinaryPathName start=$StartupType"
+    $global:StubServices[$Name] = [pscustomobject]@{ Name = $Name; Status = 'Stopped' }
+}
+function Get-Service {
+    param([string]$Name, [switch]$ErrorAction)
+    if ($env:FwGpoWebStubSvcExists -eq 'true' -and $Name -eq 'FwGpoWeb') {
+        $global:StubServices[$Name] = [pscustomobject]@{ Name = $Name; Status = 'Running' }
+    }
+    if ($global:StubServices.ContainsKey($Name)) { return $global:StubServices[$Name] }
+    return $null
+}
+function Start-Service {
+    param([string]$Name)
+    Stub-Log "Start-Service" $Name
+    if ($global:StubServices.ContainsKey($Name)) {
+        $global:StubServices[$Name].Status = if ($env:FwGpoWebStubSvcState) { $env:FwGpoWebStubSvcState } else { 'Running' }
+    }
+}
+function Stop-Service {
+    param([string]$Name)
+    Stub-Log "Stop-Service" $Name
+    if ($global:StubServices.ContainsKey($Name)) { $global:StubServices[$Name].Status = 'Stopped' }
+}
+function sc.exe {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ScArgs)
+    Stub-Log "sc.exe" (($ScArgs -join ' '))
+    return 0
+}
+function Export-PfxCertificate {
+    param($Cert, [string]$FilePath, $Password)
+    Stub-Log "Export-PfxCertificate" "file=$FilePath"
+    'stub-pfx-bytes' | Set-Content -Path $FilePath
+    return $null
+}
+# (re)defines Get-CimInstance to add Win32_Service support (later definition wins)
+function Get-CimInstance {
+    param([string]$ClassName, [string]$Filter)
+    if ($ClassName -eq 'Win32_Service') {
+        Stub-Log "Get-CimInstance" "Win32_Service $Filter"
+        return [pscustomobject]@{ Name = 'FwGpoWeb'; StartName = $(if ($env:FwGpoWebStubSvcStartName) { $env:FwGpoWebStubSvcStartName } else { 'CORP\FWGPO$' }) }
+    }
+    if ($ClassName -eq 'Win32_OperatingSystem') {
+        return [pscustomobject]@{ Caption = 'Microsoft Windows Server 2025 Datacenter' }
+    }
+    if ($ClassName -eq 'Win32_ComputerSystem') {
+        return [pscustomobject]@{ DNSHostName = "$($env:COMPUTERNAME).rfkarami.ir" }
+    }
+    throw "stub Get-CimInstance: unknown class $ClassName"
+}
+
 # --- IIS -----------------------------------------------------------------------
 $global:StubAppPools = @{}
 $global:StubWebsites = @{}
@@ -224,9 +282,10 @@ function New-SelfSignedCertificate {
 function Get-Acl {
     param([string]$Path)
     Stub-Log "Get-Acl" $Path
+    $ident = if ($env:FwGpoWebStubAclIdentity) { $env:FwGpoWebStubAclIdentity } else { 'CORP\FWGPO' }
     return [pscustomobject]@{
         Access = @(
-            [pscustomobject]@{ IdentityReference = 'CORP\FWGPO'; AccessControlType = 'Allow' }
+            [pscustomobject]@{ IdentityReference = $ident; AccessControlType = 'Allow' }
             [pscustomobject]@{ IdentityReference = 'BUILTIN\Administrators'; AccessControlType = 'Allow' }
         )
     }
