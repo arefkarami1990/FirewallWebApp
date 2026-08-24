@@ -10,7 +10,7 @@ $ver = '1.0.0'
 
 Write-Host "==> Cleaning staging/dist" -ForegroundColor Cyan
 Remove-Item -Recurse -Force staging, dist -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force staging | Out-Null
+New-Item -ItemType Directory -Force staging, dist | Out-Null
 
 Write-Host "==> Publishing self-contained win-x64 app" -ForegroundColor Cyan
 dotnet publish (Join-Path $PSScriptRoot '..\backend\FwGpoWeb\FwGpoWeb.csproj') -c Release -r win-x64 --self-contained true -o (Join-Path $PSScriptRoot 'staging\app')

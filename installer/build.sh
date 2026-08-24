@@ -10,7 +10,7 @@ command -v makensis >/dev/null 2>&1 || { echo "ERROR: makensis (NSIS 3.x) not on
 VER="1.0.0"
 echo "==> Cleaning staging/dist"
 rm -rf staging dist
-mkdir -p staging
+mkdir -p staging dist
 
 echo "==> Publishing self-contained win-x64 app (this takes a while)"
 dotnet publish ../backend/FwGpoWeb/FwGpoWeb.csproj -c Release -r win-x64 --self-contained true -o staging/app

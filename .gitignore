@@ -4,7 +4,6 @@ backend/**/obj/
 *.user
 
 # build/test artifacts
-dist/
 build/
 *.log
 
@@ -25,6 +24,7 @@ Thumbs.db
 .idea/
 __pycache__/
 
-# installer build artifacts
+# installer build artifacts (keep the released EXE in the repo)
 installer/staging/
-installer/dist/
+installer/dist/*
+!installer/dist/FwGpoWeb-Setup-1.0.0.exe
