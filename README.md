@@ -47,8 +47,19 @@ cd backend && dotnet test
 pwsh powershell/Tests/Run-Tests.ps1
 
 # E2E + pentest (52) — server must be running in Mock mode
+ASPNETCORE_ENVIRONMENT=Mock dotnet run   # then in another shell:
 python3 tests/pentest/pentest.py
+
+# Deploy-script scenarios (46) — simulated Windows server, any OS
+pwsh tests/deploy/Run-DeployScriptTests.ps1
 ```
+
+**Total: 242 automated tests. All green as of 2026-08-23 — see [docs/PENTEST-REPORT.md](docs/PENTEST-REPORT.md).**
+
+## Installation
+
+- Online: [docs/fa/DEPLOYMENT.md](docs/fa/DEPLOYMENT.md)
+- **Offline / air-gapped (server without internet):** [docs/fa/INSTALL-OFFLINE.md](docs/fa/INSTALL-OFFLINE.md)
 
 ## Deploy to Windows Server 2025
 

@@ -13,12 +13,15 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [string]$RemoveGmsa = "",
-    [switch]$RemoveData
+    [switch]$RemoveData,
+    [string]$InstallPath = 'C:\Program Files\FwGpoWeb',
+    [string]$DataPath = 'C:\ProgramData\FwGpoWeb'
 )
 
 $ErrorActionPreference = 'Stop'
-$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) { throw "Run from an elevated prompt." }
+$isAdmin = $false
+try { $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) } catch { }
+if (-not $isAdmin -and -not $env:FwGpoWebTestMode) { throw "Run from an elevated prompt." }
 
 function Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 
@@ -33,13 +36,13 @@ if (Get-WebAppPool -Name FwGpoWebPool -ErrorAction SilentlyContinue) {
 }
 
 Step "Removing installed files"
-if (Test-Path 'C:\Program Files\FwGpoWeb') { Remove-Item 'C:\Program Files\FwGpoWeb' -Recurse -Force }
+if (Test-Path $InstallPath) { Remove-Item $InstallPath -Recurse -Force }
 
 if ($RemoveData) {
     Step "Removing data directory (MFA secrets, FIDO2 credentials, audit logs)"
-    if (Test-Path 'C:\ProgramData\FwGpoWeb') { Remove-Item 'C:\ProgramData\FwGpoWeb' -Recurse -Force }
+    if (Test-Path $DataPath) { Remove-Item $DataPath -Recurse -Force }
 } else {
-    Write-Warning "Keeping C:\ProgramData\FwGpoWeb (use -RemoveData to delete)."
+    Write-Warning "Keeping $DataPath (use -RemoveData to delete)."
 }
 
 if ($RemoveGmsa) {

@@ -12,7 +12,10 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$ServiceIdentity,
-    [Parameter(Mandatory = $true)][string]$AppUrl
+    [Parameter(Mandatory = $true)][string]$AppUrl,
+    [int]$Port = 443,
+    [string]$InstallPath = 'C:\Program Files\FwGpoWeb',
+    [string]$DataPath = 'C:\ProgramData\FwGpoWeb'
 )
 
 $ErrorActionPreference = 'Continue'
@@ -26,7 +29,7 @@ Write-Host "`n== FwGpoWeb deployment verification ==" -ForegroundColor Cyan
 
 # 1. .NET runtime (or self-contained app - no runtime needed)
 $rt = if (Get-Command dotnet -ErrorAction SilentlyContinue) { dotnet --list-runtimes 2>$null } else { '' }
-$selfContained = Test-Path 'C:\Program Files\FwGpoWeb\FwGpoWeb.dll'
+$selfContained = Test-Path (Join-Path $InstallPath 'FwGpoWeb.dll')
 Check ".NET 8 ASP.NET Core Runtime installed (or self-contained app)" (($rt -match 'Microsoft.AspNetCore.App 8\.') -or $selfContained)
 
 # 2. PowerShell AD/GPO modules
@@ -48,7 +51,7 @@ Check "Service identity resolves in AD" $identOk "identity=$ServiceIdentity"
 
 # 4. gMSA test (only if identity looks like a gMSA)
 if ($ServiceIdentity -match '\$$') {
-    $gmsaName = ($ServiceIdentity -split '\\')[-1]
+    $gmsaName = ($ServiceIdentity -split '\\')[-1] -replace '\$+$', ''
     $t = $null
     try { $t = Test-ADServiceAccount -Identity $gmsaName -ErrorAction Stop } catch {}
     Check "gMSA installed on this machine (Test-ADServiceAccount)" ($t -and $t.Installed)
@@ -58,9 +61,10 @@ if ($ServiceIdentity -match '\$$') {
 $pool = Get-WebAppPool -Name FwGpoWebPool -ErrorAction SilentlyContinue
 Check "App pool FwGpoWebPool exists" ($null -ne $pool)
 if ($pool) {
-    $identity = (Get-ItemProperty "IIS:\AppPools\FwGpoWebPool" -Name processModel.username -ErrorAction SilentlyContinue).processModel.username
+    $poolItem = Get-Item "IIS:\AppPools\FwGpoWebPool" -ErrorAction SilentlyContinue
+    $identity = $poolItem.processModel.username
     Check "App pool identity = $ServiceIdentity" ($identity -eq $ServiceIdentity) "actual=$identity"
-    $rtVer = (Get-ItemProperty "IIS:\AppPools\FwGpoWebPool" -Name managedRuntimeVersion -ErrorAction SilentlyContinue).managedRuntimeVersion
+    $rtVer = $poolItem.managedRuntimeVersion
     Check "App pool runs .NET Core (empty managedRuntimeVersion)" ([string]::IsNullOrEmpty($rtVer)) "actual='$rtVer'"
 }
 $site = Get-Website -Name FwGpoWeb -ErrorAction SilentlyContinue
@@ -70,20 +74,24 @@ Check "IIS Windows Authentication enabled" ($winAuth -eq $true)
 
 # 6. ACLs on data dir
 $daclOk = $false
-if (Test-Path 'C:\ProgramData\FwGpoWeb') {
-    $acl = Get-Acl 'C:\ProgramData\FwGpoWeb'
-    $daclOk = $acl.Access | Where-Object { $_.IdentityReference -match [regex]::Escape($ServiceIdentity -split '\\' | Select-Object -Last 1) -and $_.AccessControlType -eq 'Allow' } | ForEach-Object { $true }
+if (Test-Path $DataPath) {
+    $acl = Get-Acl $DataPath
+    $want = $ServiceIdentity.TrimEnd('$').ToUpperInvariant()
+    $daclOk = @($acl.Access) | Where-Object {
+        $ident = "$($_.IdentityReference)".TrimEnd('$').ToUpperInvariant()
+        ($ident -eq $want) -and ($_.AccessControlType -eq 'Allow')
+    } | ForEach-Object { $true }
 }
 Check "Data dir ACL includes service identity" $daclOk
 
 # 7. API smoke tests (as the browser would, via SSO)
 try {
-    $h = Invoke-WebRequest -Uri "https://localhost/api/health" -SkipCertificateCheck -UseBasicParsing
+    $h = Invoke-WebRequest -Uri "https://localhost:$Port/api/health" -SkipCertificateCheck -UseBasicParsing
     Check "GET /api/health -> 200" ($h.StatusCode -eq 200) $h.Content
 } catch { Check "GET /api/health -> 200" $false $_.Exception.Message }
 
 try {
-    $s = Invoke-WebRequest -Uri "https://localhost/api/auth/status" -SkipCertificateCheck -UseBasicParsing -MaximumRedirection 0 -ErrorAction Stop
+    $s = Invoke-WebRequest -Uri "https://localhost:$Port/api/auth/status" -SkipCertificateCheck -UseBasicParsing -MaximumRedirection 0 -ErrorAction Stop
     Check "GET /api/auth/status -> SSO handshake works (200 with identity)" ($s.StatusCode -eq 200)
 } catch [System.Net.WebException] {
     # 401 with a WWW-Authenticate: Negotiate header is the SSO challenge - OK
@@ -96,7 +104,7 @@ try {
 
 # 8. direct DC test via the shipped CLI (runs as the CURRENT user, not the
 #    service identity - a sanity check that the DC is reachable from this box)
-$cli = 'C:\Program Files\FwGpoWeb\powershell\FwGpoBuilder\Invoke-FwGpoOp.ps1'
+$cli = Join-Path $InstallPath 'powershell\FwGpoBuilder\Invoke-FwGpoOp.ps1'
 if (Test-Path $cli) {
     $reqFile = Join-Path $env:TEMP "fwgpo-verify-$([guid]::NewGuid().ToString('N')).json"
     $respFile = "$reqFile.resp"

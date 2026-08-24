@@ -51,31 +51,34 @@ param(
     [string]$PublishDir = "",
     [switch]$SelfContained,
     [string]$FeatureSource = "",
-    [string]$CapabilitySource = ""
+    [string]$CapabilitySource = "",
+    [string]$InstallPath = 'C:\Program Files\FwGpoWeb',
+    [string]$DataPath = 'C:\ProgramData\FwGpoWeb'
 )
 
 $ErrorActionPreference = 'Stop'
-$installPath = 'C:\Program Files\FwGpoWeb'
-$dataPath = 'C:\ProgramData\FwGpoWeb'
+$installPath = $InstallPath
+$dataPath = $DataPath
 $siteName = 'FwGpoWeb'
 $appPool = 'FwGpoWebPool'
 
 function Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 
 # --- 0. preconditions --------------------------------------------------------
-if (-not (Get-ExecutionPolicy -Scope LocalMachine)) { }
 $os = (Get-CimInstance Win32_OperatingSystem).Caption
 Write-Host "Target OS: $os"
 if ($os -notmatch 'Windows Server 20(22|25)') {
     Write-Warning "This script targets Windows Server 2022/2025; continuing anyway."
 }
 # admin check
-$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) { throw "Run this script from an elevated (Administrator) prompt." }
+$isAdmin = $false
+try { $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) } catch { }
+if (-not $isAdmin -and -not $env:FwGpoWebTestMode) { throw "Run this script from an elevated (Administrator) prompt." }
 
 # --- 1. .NET 8 ASP.NET Core Runtime ------------------------------------------
 if ($SelfContained) {
-    Step ".NET runtime check SKIPPED (self-contained publish - app carries its own runtime)"
+    Step ".NET runtime check SKIPPED (self-contained publish)"
+    Write-Warning "Self-contained publish under IIS still needs the ASP.NET Core Runtime 8 ONCE, because it registers the IIS AspNetCoreModuleV2 handler. If you host with Kestrel instead (no IIS), the runtime is truly not needed."
 }
 else {
 Step "Checking .NET 8 ASP.NET Core Runtime"
@@ -99,9 +102,9 @@ if ($needDotnet) {
 Step "Installing IIS with Windows Authentication"
 $features = @(
     'Web-Server','Web-Common-Http','Web-Static-Content','Web-Default-Doc',
-    'Web-Dir-Browsing','Web-Http-Errors','Web-Log-Libraries','Web-Request-Filters',
+    'Web-Http-Errors','Web-Log-Libraries','Web-Request-Filters',
     'Web-Stat-Logging','Web-Mgmt-Console','Web-Mgmt-Service','Web-Http-Compression',
-    'IIS-WindowsAuth','IIS-ASPNET5'
+    'IIS-WindowsAuth'
 )
 $missing = $features | Where-Object { -not (Get-WindowsFeature -Name $_ -ErrorAction SilentlyContinue) }
 if ($missing) {
@@ -141,6 +144,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 if ($PublishDir) {
     if (-not (Test-Path (Join-Path $PublishDir 'FwGpoWeb.dll'))) { throw "PublishDir does not contain FwGpoWeb.dll (run `dotnet publish` first)." }
     # copy the pre-published app into the install path (offline install)
+    New-Item -ItemType Directory -Path $installPath -Force | Out-Null
     Copy-Item (Join-Path $PublishDir '*') $installPath -Recurse -Force
     Write-Host "    copied pre-published app from $PublishDir" -ForegroundColor Green
 } else {
@@ -181,17 +185,21 @@ Write-Host "    RpId=$rpId Origin=$AppUrl" -ForegroundColor Green
 # --- 6. data directory + ACLs ---------------------------------------------------
 Step "Preparing $dataPath and ACLs for the service identity"
 New-Item -ItemType Directory -Path $dataPath -Force | Out-Null
-$acl = Get-Acl $dataPath
-$rule = New-Object System.AccessControl.FileSystemAccessRule($ServiceIdentity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
-$rule2 = New-Object System.AccessControl.FileSystemAccessRule('BUILTIN\Administrators', 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
-$acl.SetAccessRule($rule); $acl.SetAccessRule($rule2)
-Set-Acl $dataPath $acl
+try {
+    $acl = Get-Acl $dataPath
+    $acl.SetAccessRule((New-Object System.AccessControl.FileSystemAccessRule($ServiceIdentity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+    $acl.SetAccessRule((New-Object System.AccessControl.FileSystemAccessRule('BUILTIN\Administrators', 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+    Set-Acl $dataPath $acl
+} catch {
+    Write-Warning "Could not apply ACLs on $dataPath automatically: $($_.Exception.Message)`nApply manually: icacls `"$dataPath`" /grant `"${ServiceIdentity}:(OI)(CI)F`" /grant `"BUILTIN\Administrators:(OI)(CI)F`""
+}
 
 # --- 7. IIS app pool (service identity: gMSA$ or domain user) -------------------
 Step "Creating app pool '$appPool' with identity $ServiceIdentity"
 if (Get-WebAppPool -Name $appPool -ErrorAction SilentlyContinue) {
     Set-ItemProperty "IIS:\AppPools\$appPool" -Name processModel.username -Value $ServiceIdentity
     Set-ItemProperty "IIS:\AppPools\$appPool" -Name managedRuntimeVersion -Value ""
+    Set-WebConfigurationProperty -Filter "system.applicationHost/applicationPools/[@name='$appPool']/processModel" -Name identityType -Value specificUser
 } else {
     New-WebAppPool -Name $appPool | Out-Null
     Set-ItemProperty "IIS:\AppPools\$appPool" -Name processModel.username -Value $ServiceIdentity
@@ -213,8 +221,7 @@ if (Get-Website -Name $siteName -ErrorAction SilentlyContinue) {
     Stop-WebApp -Name $siteName
     Remove-WebSite -Name $siteName
 }
-New-Website -Name $siteName -Port $Port -AppPool $appPool -PhysicalPath $installPath | Out-Null
-Add-WebBinding -Name $siteName -Protocol https -Port $Port -CertificateThumbprint $CertThumbprint
+New-Website -Name $siteName -Port $Port -Secure -CertificateThumbprint $CertThumbprint -AppPool $appPool -PhysicalPath $installPath | Out-Null
 Start-Website -Name $siteName
 
 # --- 9. Windows Authentication (Kerberos/NTLM) for SSO ---------------------------
@@ -225,7 +232,7 @@ Set-WebConfigurationProperty -Filter "system.webServer/security/authentication/a
 # --- 10. smoke test ---------------------------------------------------------------
 Step "Smoke test: GET /api/health"
 try {
-    $r = Invoke-WebRequest -Uri "https://localhost:api/health" -SkipCertificateCheck -UseBasicParsing
+    $r = Invoke-WebRequest -Uri "https://localhost:$Port/api/health" -SkipCertificateCheck -UseBasicParsing
     Write-Host "    $($r.StatusCode): $($r.Content)" -ForegroundColor Green
 } catch {
     Write-Warning "Health check failed: $($_.Exception.Message) - check IIS logs (log files) and the app pool identity."

@@ -54,6 +54,7 @@ function Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 
 # --- 0. sanity -------------------------------------------------------------
 if ($GmsaName.Length -gt 20) { throw "GmsaName should be <= 20 characters." }
+if ($GmsaName -notmatch '^[a-zA-Z][a-zA-Z0-9_-]*$') { throw "GmsaName must start with a letter and contain only letters/digits/_/- (no spaces)." }
 try { Import-Module ActiveDirectory -ErrorAction Stop }
 catch { throw "ActiveDirectory module not available. Run this from a domain controller or a machine with RSAT AD PowerShell (Add-WindowsCapability -Online -Name Rsat.AdPowerShell~~~~0.0.1.0)." }
 if (-not $DnsDomain) { throw "Cannot determine DNS domain; pass -DnsDomain." }
@@ -84,24 +85,44 @@ if (Get-ADServiceAccount -Identity $GmsaName -ErrorAction SilentlyContinue) {
     Write-Host "    already exists; updating SPN" -ForegroundColor Yellow
     Set-ADServiceAccount -Identity $GmsaName -ServicePrincipalName "HTTP/$SpnHost"
 } else {
-    New-ADServiceAccount -Name $GmsaName -DNSName $upn -ServicePrincipalName "HTTP/$SpnHost" -Description "FwGpoWeb service account"
+    try {
+        New-ADServiceAccount -Name $GmsaName -DNSName $upn -ServicePrincipalName "HTTP/$SpnHost" -Description "FwGpoWeb service account"
+    } catch {
+        if ("$($_.Exception.Message)" -match 'SPN|service principal|already exists') {
+            throw "SPN conflict: HTTP/$SpnHost is already registered on another account. Find/remove it with: setspn -X  (then re-run this script)."
+        }
+        throw
+    }
 }
 
 # --- 3. install on the web server ------------------------------------------
 Step "Installing gMSA on $ComputerName (requires the machine to be domain-joined)"
+$isLocal = $false
+foreach ($c in @($env:COMPUTERNAME, "$($env:COMPUTERNAME).$($env:USERDNSDOMAIN)")) {
+    if ($c -and $ComputerName -ieq $c) { $isLocal = $true }
+}
 try {
-    if ($ComputerName -eq $env:COMPUTERNAME) {
+    if ($isLocal) {
         Install-ADServiceAccount -Identity $GmsaName
-        Test-ADServiceAccount -Identity $GmsaName | Write-Host
+        $t = Test-ADServiceAccount -Identity $GmsaName
+        $t | Write-Host
+        if (-not $t.Installed) {
+            throw "gMSA is not (yet) installed on $ComputerName. This can happen when the account just replicated - wait a few minutes and re-run: Install-ADServiceAccount -Identity $GmsaName"
+        }
     } else {
         $cred = Get-Credential -Message "Credentials (domain admin) for $ComputerName"
-        Invoke-Command -ComputerName $ComputerName -Credential $cred -ScriptBlock {
+        $remote = Invoke-Command -ComputerName $ComputerName -Credential $cred -ScriptBlock {
             param($name)
             Import-Module ActiveDirectory
             Install-ADServiceAccount -Identity $name
             Test-ADServiceAccount -Identity $name
         } -ArgumentList $GmsaName
+        if ($remote -and -not $remote.Installed) {
+            throw "gMSA is not (yet) installed on $ComputerName - wait for replication and re-run the install on that machine."
+        }
     }
+} catch [System.Management.Automation.RuntimeException] {
+    throw
 } catch {
     throw "gMSA installation failed: $($_.Exception.Message)"
 }
@@ -139,7 +160,7 @@ else {
 Write-Host @"
 
 DONE. App pool identity for the IIS app (note the trailing '$'):
-    $DnsDomain.ToUpperInvariant()\${GmsaName}\$   (or $upn)
+    $( $DnsDomain.ToUpperInvariant() )\$GmsaName`$   (or $upn)
 
 Verify later with:  Test-ADServiceAccount -Identity $GmsaName
 "@ -ForegroundColor Green
