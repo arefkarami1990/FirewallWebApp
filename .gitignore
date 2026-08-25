@@ -27,4 +27,4 @@ __pycache__/
 # installer build artifacts (keep the released EXE in the repo)
 installer/staging/
 installer/dist/*
-!installer/dist/FwGpoWeb-Setup-1.0.1.exe
+!installer/dist/FwGpoWeb-Setup-1.0.2.exe

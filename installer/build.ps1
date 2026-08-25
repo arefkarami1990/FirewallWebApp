@@ -1,4 +1,4 @@
-# Builds FwGpoWeb-Setup-1.0.1.exe (NSIS installer) on Windows.
+# Builds FwGpoWeb-Setup-1.0.2.exe (NSIS installer) on Windows.
 # Requires: .NET 8 SDK + NSIS 3.x (makensis on PATH).
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
@@ -6,7 +6,7 @@ Set-Location $PSScriptRoot
 $null = Get-Command dotnet -ErrorAction Stop
 $null = Get-Command makensis -ErrorAction Stop
 
-$ver = '1.0.1'
+$ver = '1.0.2'
 
 Write-Host "==> Cleaning staging/dist" -ForegroundColor Cyan
 Remove-Item -Recurse -Force staging, dist -ErrorAction SilentlyContinue

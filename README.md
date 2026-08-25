@@ -60,11 +60,11 @@ scenarios + 56 E2E/pentest, incl. a real Kestrel HTTPS/PFX test). All green as o
 
 ## Installation — one-click installer (recommended)
 
-**`installer/`** builds a single self-contained EXE — `FwGpoWeb-Setup-1.0.1.exe` — that runs the whole installation:
+**`installer/`** builds a single self-contained EXE — `FwGpoWeb-Setup-1.0.2.exe` — that runs the whole installation:
 
 ```
-FwGpoWeb-Setup-1.0.1.exe                       ; wizard (service identity, App URL, cert, gMSA)
-FwGpoWeb-Setup-1.0.1.exe /S /ServiceIdentity=CORP\FWGPO$ /AppUrl=https://fwgpo.corp.local
+FwGpoWeb-Setup-1.0.2.exe                       ; wizard (service identity, App URL, cert, gMSA)
+FwGpoWeb-Setup-1.0.2.exe /S /ServiceIdentity=CORP\FWGPO$ /AppUrl=https://fwgpo.corp.local
 ```
 
 What it does in one pass:

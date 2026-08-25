@@ -5,19 +5,18 @@
 ;   self-contained .NET 8 app + Kestrel + Windows Service.
 ;   No IIS, no .NET runtime download, works air-gapped (RSAT from ISO if missing).
 ;
-; Interactive:  FwGpoWeb-Setup-1.0.1.exe
-; Silent:       FwGpoWeb-Setup-1.0.1.exe /S /ServiceIdentity=CORP\FWGPO$ /AppUrl=https://fwgpo.corp.local [/CreateGmsa=true /GmsaName=FWGPO /Port=443 /CertPfx=C:\cert.pfx /CertPfxPassword=pw /ServicePassword=pw /CapabilitySource=E:\ /InstallPath=... /DataPath=...]
+; Interactive:  FwGpoWeb-Setup-1.0.2.exe
+; Silent:       FwGpoWeb-Setup-1.0.2.exe /S /ServiceIdentity=CORP\FWGPO$ /AppUrl=https://fwgpo.corp.local [/CreateGmsa=true /GmsaName=FWGPO /Port=443 /CertPfx=C:\cert.pfx /CertPfxPassword=pw /ServicePassword=pw /CapabilitySource=E:\ /InstallPath=... /DataPath=...]
 ;   (silent values must not contain spaces)
 ;
 ; Build: makensis FwGpoWeb-Setup.nsi   (staging/ is created by build.sh / build.ps1)
 ; =============================================================================
 
 !define APP_NAME   "FwGpoWeb"
-!define APP_VER    "1.0.1"
+!define APP_VER    "1.0.2"
 !define STAGE      "$TEMP\FwGpoWebSetup"
 !define ARGSFILE   "$TEMP\FwGpoWebSetup\installer-args.txt"
 !define RESULTFILE "$TEMP\FwGpoWebSetup\setup-result.txt"
-!define POWERSHELL "$SYSDIR\powershell\powershell.exe"
 
 Unicode true
 RequestExecutionLevel admin
@@ -439,11 +438,12 @@ FunctionEnd
 
 ; ---------------------------------------------------------------- read result
 Var ResultLine
+Var PSExe
 Function ReadResult
   StrCpy $ResultText ""
   StrCpy $ResultOk "0"
   IfFileExists "${RESULTFILE}" haveresult
-  StrCpy $ResultText "The installer could not produce a result — the PowerShell orchestration did not complete. Check the Windows Application event log."
+  StrCpy $ResultText "The installation did not produce a result file. The staging folder was kept (path above); its install.log shows what happened. Also check the Windows Application event log."
   Goto readdone
   haveresult:
   FileOpen $R0 "${RESULTFILE}" r
@@ -524,9 +524,34 @@ Section "Install ${APP_NAME}"
     Call WriteArgsFile
   ${EndIf}
 
+  ; ---- resolve the PowerShell executable ----
+  ; The NSIS stub is 32-bit; on 64-bit Windows, system32 is redirected to
+  ; SysWOW64. The literal "sysnative" path maps to the REAL 64-bit System32,
+  ; then we fall back to the normal system dir, then pwsh 7.
+  StrCpy $PSExe ""
+  IfFileExists "$WINDIR\System32\sysnative\WindowsPowerShell\v1.0\powershell.exe" psFound64
+  IfFileExists "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" psFoundSys
+  IfFileExists "$PROGRAMFILES64\PowerShell\7\pwsh.exe" psFoundPwsh
+  IfFileExists "$PROGRAMFILES\PowerShell\7\pwsh.exe" psFoundPwsh32
+  StrCpy $ResultOk "0"
+  StrCpy $ResultText "Windows PowerShell was not found (checked $WINDIR\System32\sysnative, system dir, and Program Files PowerShell 7). Every Windows Server ships Windows PowerShell 5.1 - fix the system, then re-run."
+  Goto installdone
+  psFound64:
+  StrCpy $PSExe "$WINDIR\System32\sysnative\WindowsPowerShell\v1.0\powershell.exe"
+  Goto psResolved
+  psFoundSys:
+  StrCpy $PSExe "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+  Goto psResolved
+  psFoundPwsh:
+  StrCpy $PSExe "$PROGRAMFILES64\PowerShell\7\pwsh.exe"
+  Goto psResolved
+  psFoundPwsh32:
+  StrCpy $PSExe "$PROGRAMFILES\PowerShell\7\pwsh.exe"
+  psResolved:
+  DetailPrint "Using PowerShell: $PSExe"
   DetailPrint "Running the FwGpoWeb installation (gMSA, app, service, verify) — this can take a few minutes..."
-  ExecWait '${POWERSHELL} -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${STAGE}\installer\Install-FromInstaller.ps1" -StageDir "${STAGE}" -ArgsFile "${ARGSFILE}"'
-
+  ExecWait '"$PSExe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${STAGE}\installer\Install-FromInstaller.ps1" -StageDir "${STAGE}" -ArgsFile "${ARGSFILE}"'
+  installdone:
   Call ReadResult
 
   ${If} $ResultOk == "1"
